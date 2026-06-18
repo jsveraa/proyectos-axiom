@@ -2076,12 +2076,10 @@ function applyRoleUI(){
   // Admin-only header buttons
   document.getElementById('btn-users').style.display = isAdmin ? '' : 'none';
   document.getElementById('btn-audit').style.display = isAdmin ? '' : 'none';
-  // Personal tab visibility
+  // Tabs only visible for admins
   document.getElementById('tab-personal').style.display = isAdmin ? '' : 'none';
-  // If user role and on personal panel, redirect to dashboard
-  if(!isAdmin){
-    // Also hide save backup and import (optionally keep - here we keep them)
-  }
+  document.getElementById('tab-carga').style.display = isAdmin ? '' : 'none';
+  document.getElementById('tab-indicadores').style.display = isAdmin ? '' : 'none';
 }
 
 // ---- AUDIT LOG ----
