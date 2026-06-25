@@ -140,6 +140,14 @@ tbody td{padding:8px 11px;vertical-align:middle}
 .equipo-item .area-sel{background:var(--bg);border:1px solid var(--bd);color:var(--tx);font-family:var(--mo);font-size:11px;padding:2px 6px;border-radius:4px;outline:none;cursor:pointer;display:none}
 .equipo-item.checked .area-sel{display:inline-block}
 .equipo-item select option{background:var(--sf2)}
+/* Disciplinas por persona */
+.per-disc-wrap{display:none;flex-wrap:wrap;gap:4px;padding:4px 6px 2px 26px;border-top:1px dashed var(--bd);margin-top:3px}
+.equipo-item.checked .per-disc-wrap{display:flex}
+.per-disc-label{font-size:10px;color:var(--txm);width:100%;margin-bottom:2px;text-transform:uppercase;letter-spacing:.6px}
+.per-disc-cb{display:flex;align-items:center;gap:4px;font-size:11px;color:var(--tx);padding:2px 6px;border-radius:4px;background:var(--sf2);border:1px solid var(--bd);cursor:pointer;user-select:none;transition:background .1s,border-color .1s}
+.per-disc-cb:hover{border-color:var(--ac2)}
+.per-disc-cb input{accent-color:var(--ac2);width:11px;height:11px;cursor:pointer}
+.per-disc-cb.selected{background:rgba(74,144,217,.12);border-color:var(--ac2);color:var(--ac2)}
 /* DRAWER */
 .drov{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:200}
 .drov.open{display:block}
@@ -687,8 +695,8 @@ function migrate(d){
   d.personal=d.personal.map(p=>({...p,areas:p.areas||(p.area?[p.area]:[])}));
   d.proyectos=d.proyectos.map(p=>{
     const eq=(p.equipo||[]).map(e=>{
-      if(typeof e==='string')return{id:e,area:null};
-      if(e&&typeof e==='object')return e;
+      if(typeof e==='string')return{id:e,area:null,disciplinas:[]};
+      if(e&&typeof e==='object')return{...e,disciplinas:e.disciplinas||[]};
       return null;
     }).filter(Boolean);
     return{...p,equipo:eq,entregables:p.entregables||{},
@@ -779,11 +787,14 @@ function cargaPersona(pid,proyectos,personal){
     const areaUsadaEnProy=areaEnProy(pr,pid); // área con la que participa en este proyecto
     if(!grupos[k]){grupos[k]={base:pr,fases:[],entTotales:0,entPorDisc:{}};}
     grupos[k].fases.push(pr);
-    // Solo contar entregables de disciplinas que corresponden al área con la que participa
+    // Filtrar entregables por disciplinas asignadas específicamente a esta persona
+    const equipoEntry=(pr.equipo||[]).find(e=>(typeof e==='string'?e:e.id)===pid);
+    const perDiscList=equipoEntry&&equipoEntry.disciplinas&&equipoEntry.disciplinas.length?equipoEntry.disciplinas:null;
     Object.entries(pr.entregables||{}).forEach(([disc,arr])=>{
       if(!arr||!arr.length)return;
-      // Si hay área definida para este proyecto, filtrar por mapeo; si no, contar todas
-      if(!areaUsadaEnProy||discCuentaParaArea(disc,areaUsadaEnProy)){
+      // Si tiene disciplinas específicas asignadas, usar esas; si no, caer al mapeo de área
+      const cuenta=perDiscList?perDiscList.includes(disc):(!areaUsadaEnProy||discCuentaParaArea(disc,areaUsadaEnProy));
+      if(cuenta){
         grupos[k].entTotales+=(arr?arr.length:0);
         grupos[k].entPorDisc[disc]=(grupos[k].entPorDisc[disc]||0)+(arr?arr.length:0);
       }
@@ -1127,6 +1138,25 @@ function updateAreaBadge(sel, cbClass, pid){
   badge.style.cssText='font-size:10px;padding:1px 5px;margin-right:4px';
   badge.textContent=newArea.substring(0,3);
 }
+// Toggle persona en drawer de disciplinas & equipo
+function toggleDraItem(cb){
+  const pid=cb.value;
+  const item=document.getElementById('dra-'+pid);
+  if(!item)return;
+  item.classList.toggle('checked', cb.checked);
+  if(cb.checked){
+    item.querySelectorAll('.perdcb').forEach(function(dc){
+      dc.checked=true;
+      const lbl=dc.closest('.per-disc-cb');
+      if(lbl)lbl.classList.add('selected');
+    });
+  }
+}
+// Toggle visual state of discipline chip
+function togglePerDiscCb(cb){
+  const lbl=cb.closest('.per-disc-cb');
+  if(lbl)lbl.classList.toggle('selected',cb.checked);
+}
 
 // ---- Leer equipo del formulario ----
 function readEquipoFromForm(cbClass){
@@ -1223,17 +1253,55 @@ function fillDrawerDiscEquipo(p){
       +'</div>'
       +'</div>';
   }).join('');
+  // Equipo con selector de disciplinas por persona
   document.getElementById('d-equipo').innerHTML=d.personal.map(function(per){
-    const a=getAreas(per)[0]||'';
-    return '<label class="ai"><input type="checkbox" class="dracb" value="'+per.id+'" '+((p.equipo||[]).includes(per.id)?'checked':'')+'>'+
-      '<span><span class="b '+(AB[a]||'')+'" style="font-size:10px;padding:1px 4px;margin-right:3px">'+a.substring(0,3)+'</span>'+per.nombre+'</span></label>';
+    const areas=getAreas(per);
+    const a=areas[0]||'';
+    const equipoEntry=(p.equipo||[]).find(function(e){return(typeof e==='string'?e:e.id)===per.id;});
+    const isChecked=!!equipoEntry;
+    const savedDiscs=(equipoEntry&&equipoEntry.disciplinas)||[];
+    // Disciplinas del proyecto que mapean al area(s) de esta persona
+    const myDiscs=(p.disciplinas||[]).filter(function(disc){
+      return areas.some(function(ar){return discCuentaParaArea(disc,ar);});
+    });
+    var discChips='';
+    if(myDiscs.length){
+      discChips='<div class="per-disc-wrap" id="pdw-'+per.id+'">'
+        +'<div class="per-disc-label">Disciplinas asignadas:</div>'
+        +myDiscs.map(function(disc){
+          // Pre-select: if saved, use that; if new person with 1 disc auto-select it
+          var sel=savedDiscs.length?savedDiscs.includes(disc):(myDiscs.length===1);
+          var discKey=disc.replace(/\s/g,'_').replace(/[^a-zA-Z0-9_]/g,'');
+          return '<label class="per-disc-cb'+(sel?' selected':'')+'" id="pdc-'+per.id+'-'+discKey+'">'
+            +'<input type="checkbox" class="perdcb" data-pid="'+per.id+'" value="'+disc+'" '+(sel?'checked':'')
+            +' onchange="togglePerDiscCb(this)">'+disc+'</label>';
+        }).join('')
+        +'</div>';
+    }
+    return '<div class="equipo-item'+(isChecked?' checked':'')+'" id="dra-'+per.id+'">'
+      +'<input type="checkbox" class="dracb" value="'+per.id+'" '+(isChecked?'checked':'')
+      +' onchange="toggleDraItem(this)">'  
+      +'<span style="flex:1;font-size:12px">'
+      +'<span class="b '+(AB[a]||'')+'" style="font-size:10px;padding:1px 4px;margin-right:3px">'+a.substring(0,3)+'</span>'+per.nombre
+      +'</span>'
+      +discChips
+      +'</div>';
   }).join('');
 }
 function saveDrawerDiscEquipo(){
   const d=gd();const idx=d.proyectos.findIndex(x=>x.id===drawerPId);
   const newDisc=[...document.querySelectorAll('.drdcb:checked')].map(c=>c.value);
   d.proyectos[idx].disciplinas=newDisc;
-  d.proyectos[idx].equipo=[...document.querySelectorAll('.dracb:checked')].map(c=>c.value);
+  // Save equipo with per-person disciplines
+  d.proyectos[idx].equipo=[...document.querySelectorAll('.dracb:checked')].map(function(c){
+    const pid=c.value;
+    const discs=[...document.querySelectorAll('.perdcb[data-pid="'+pid+'"]:checked')].map(cb=>cb.value);
+    // Preserve area from existing entry or derive from personal
+    const existing=(d.proyectos[idx].equipo||[]).find(e=>(typeof e==='string'?e:e.id)===pid);
+    const per=d.personal.find(x=>x.id===pid);
+    const area=(existing&&typeof existing==='object'?existing.area:null)||(getAreas(per||{})[0]||null);
+    return{id:pid,area,disciplinas:discs};
+  });
   // Save hours per discipline
   const hpd={};
   document.querySelectorAll('.disc-hp').forEach(function(inp){
