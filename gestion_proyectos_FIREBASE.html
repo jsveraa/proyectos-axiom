@@ -425,6 +425,7 @@ input[type=date]{color-scheme:light}
 .audit-table td{padding:6px 10px;border-bottom:1px solid var(--bd);vertical-align:middle}
 .audit-table tr:hover td{background:var(--sf2)}
 </style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
 <body>
 <div class="app">
@@ -494,6 +495,7 @@ input[type=date]{color-scheme:light}
     <span id="user-badge"></span>
     <button class="btn bg bs" id="btn-users" style="display:none" onclick="openModal('mo-users')">👥 Usuarios</button>
     <button class="btn bg bs" id="btn-audit" style="display:none" onclick="openAuditModal()">📋 Auditoría</button>
+    <button class="btn bg bs" id="btn-report" style="display:none" onclick="exportExcelReport()">📊 Informe Excel</button>
     <button class="btn bp bs" onclick="saveBackup()" title="Descargar respaldo JSON ahora">💾 Guardar respaldo</button>
     <button class="btn bg bs" onclick="document.getElementById('imp').click()">↑ Importar</button>
     <button class="btn bg bs" onclick="doLogout()">⏻ Salir</button>
@@ -2144,6 +2146,7 @@ function applyRoleUI(){
   // Admin-only header buttons
   document.getElementById('btn-users').style.display = isAdmin ? '' : 'none';
   document.getElementById('btn-audit').style.display = isAdmin ? '' : 'none';
+  document.getElementById('btn-report').style.display = isAdmin ? '' : 'none';
   // Tabs only visible for admins
   document.getElementById('tab-personal').style.display = isAdmin ? '' : 'none';
   document.getElementById('tab-carga').style.display = isAdmin ? '' : 'none';
@@ -2324,6 +2327,127 @@ async function startApp(){
   document.getElementById('loading-screen').classList.add('hidden');
   document.getElementById('auth-overlay').classList.remove('hidden');
   document.getElementById('au-user').focus();
+}
+
+// ============ INFORME EXCEL (5 hojas) ============
+function exportExcelReport(){
+  if(!window.XLSX){notif('Librería Excel no disponible');return;}
+  const d=gd(),today=new Date();
+  const wb=XLSX.utils.book_new();
+
+  // ---------- HOJA 1: DASHBOARD ----------
+  const uniq=proyectosUnicos(d.proyectos);
+  const atr=d.proyectos.filter(p=>p.estado==='Atrasado').length;
+  const cur=d.proyectos.filter(p=>p.estado==='En curso').length;
+  const comp=d.proyectos.filter(p=>p.estado==='Completado').length;
+  const te=d.proyectos.reduce((s,p)=>s+totalEnt(p),0);
+  let entEntregados=0,entEnProceso=0,entNoEnt=0,entSinIniciar=0;
+  d.proyectos.forEach(p=>{Object.values(p.entregables||{}).forEach(arr=>{(arr||[]).forEach(r=>{
+    const est=r.estado||'sininciar';
+    if(est==='entregado')entEntregados++;else if(est==='enproceso')entEnProceso++;
+    else if(est==='noentregado')entNoEnt++;else entSinIniciar++;
+  });});});
+  const dashRows=[
+    ['INFORME GENERAL — DASHBOARD'],
+    ['Generado el',today.toLocaleDateString('es-CO',{day:'2-digit',month:'long',year:'numeric'})],
+    [],
+    ['INDICADORES GENERALES'],
+    ['Proyectos únicos',uniq.length],
+    ['Fases totales',d.proyectos.length],
+    ['En curso',cur],
+    ['Atrasados',atr],
+    ['Completados',comp],
+    ['Personal registrado',d.personal.length],
+    ['Entregables totales',te],
+    [],
+    ['ESTADO DE ENTREGABLES'],
+    ['Entregados',entEntregados],
+    ['En proceso',entEnProceso],
+    ['No entregados',entNoEnt],
+    ['Sin iniciar',entSinIniciar],
+    [],
+    ['PRÓXIMOS VENCIMIENTOS (no completados, ordenados por fecha)'],
+    ['Cliente','Proyecto','Fase','Fecha límite','Días restantes','Estado'],
+  ];
+  [...d.proyectos].filter(p=>p.estado!=='Completado').sort((a,b)=>new Date(a.fecha)-new Date(b.fecha))
+    .forEach(p=>{const dias=Math.round((new Date(p.fecha)-today)/86400000);
+      dashRows.push([p.cliente,p.nombre,p.tipo,fd(p.fecha),dias<0?`${Math.abs(dias)} d. vencido`:`${dias} días`,p.estado]);});
+  const wsDash=XLSX.utils.aoa_to_sheet(dashRows);
+  wsDash['!cols']=[{wch:18},{wch:24},{wch:18},{wch:16},{wch:18},{wch:14}];
+  XLSX.utils.book_append_sheet(wb,wsDash,'Dashboard');
+
+  // ---------- HOJA 2: PROYECTOS ----------
+  const proyRows=[
+    ['LISTADO DE PROYECTOS'],
+    [],
+    ['Cliente','Proyecto','Fase/Tipo','Fecha límite','Estado','Disciplinas','Entregables totales','Observaciones'],
+  ];
+  d.proyectos.forEach(p=>{
+    proyRows.push([p.cliente,p.nombre,p.tipo,fd(p.fecha),p.estado,(p.disciplinas||[]).join(', '),totalEnt(p),p.obs||'']);
+  });
+  const wsProy=XLSX.utils.aoa_to_sheet(proyRows);
+  wsProy['!cols']=[{wch:16},{wch:24},{wch:16},{wch:14},{wch:12},{wch:40},{wch:16},{wch:40}];
+  XLSX.utils.book_append_sheet(wb,wsProy,'Proyectos');
+
+  // ---------- HOJA 3: PERSONAL ----------
+  const persRows=[
+    ['LISTADO DE PERSONAL'],
+    [],
+    ['Nombre','Áreas','Disponibilidad','Proyectos asignados (activos)','Cantidad proyectos activos'],
+  ];
+  d.personal.forEach(p=>{
+    const asg=d.proyectos.filter(pr=>estaEnEquipo(pr,p.id)&&esActivo(pr));
+    const asgUniq=proyectosUnicos(asg);
+    const asgTxt=asgUniq.map(pr=>`${pr.cliente} · ${pr.nombre}`).join(', ');
+    persRows.push([p.nombre,getAreas(p).join(', '),p.disponibilidad,asgTxt,asgUniq.length]);
+  });
+  const wsPers=XLSX.utils.aoa_to_sheet(persRows);
+  wsPers['!cols']=[{wch:22},{wch:20},{wch:18},{wch:50},{wch:14}];
+  XLSX.utils.book_append_sheet(wb,wsPers,'Personal');
+
+  // ---------- HOJA 4: CARGA DE TRABAJO ----------
+  const cargaRows=[
+    ['CARGA DE TRABAJO POR PERSONA (proyectos activos)'],
+    [],
+    ['Nombre','Disponibilidad','Proyecto','Cliente','Fase','Entregables asignados a esta persona'],
+  ];
+  d.personal.forEach(p=>{
+    const asignados=d.proyectos.filter(pr=>estaEnEquipo(pr,p.id)&&esActivo(pr));
+    if(!asignados.length){
+      cargaRows.push([p.nombre,p.disponibilidad,'— Sin proyectos activos —','','','']);
+      return;
+    }
+    const grupos=cargaPersona(p.id,asignados,d.personal);
+    grupos.forEach(g=>{
+      cargaRows.push([p.nombre,p.disponibilidad,g.base.nombre,g.base.cliente,g.fases.map(f=>f.tipo).join(', '),g.entTotales]);
+    });
+  });
+  const wsCarga=XLSX.utils.aoa_to_sheet(cargaRows);
+  wsCarga['!cols']=[{wch:22},{wch:18},{wch:24},{wch:16},{wch:30},{wch:18}];
+  XLSX.utils.book_append_sheet(wb,wsCarga,'Carga');
+
+  // ---------- HOJA 5: DASHBOARD PERSONAL ----------
+  const proyEncurso=d.proyectos.filter(esActivo);
+  const indRows=[
+    ['DASHBOARD PERSONAL — RESUMEN POR PERSONA'],
+    [],
+    ['Nombre','Áreas','Disponibilidad','Proyectos únicos asignados (en curso)','Entregables totales asignados'],
+  ];
+  d.personal.forEach(p=>{
+    const asignadosUniq=proyectosUnicos(proyEncurso.filter(pr=>estaEnEquipo(pr,p.id))).length;
+    const grupos=cargaPersona(p.id,proyEncurso,d.personal);
+    const entTot=grupos.reduce((s,g)=>s+g.entTotales,0);
+    indRows.push([p.nombre,getAreas(p).join(', '),p.disponibilidad,asignadosUniq,entTot]);
+  });
+  const wsInd=XLSX.utils.aoa_to_sheet(indRows);
+  wsInd['!cols']=[{wch:22},{wch:20},{wch:18},{wch:30},{wch:24}];
+  XLSX.utils.book_append_sheet(wb,wsInd,'Dashboard Personal');
+
+  // ---------- Descargar ----------
+  const fname=`Informe_Gestion_Proyectos_${today.toISOString().slice(0,10)}.xlsx`;
+  XLSX.writeFile(wb,fname);
+  notif('Informe Excel generado');
+  if(typeof logAudit==='function')logAudit('edit','Generó informe Excel (5 hojas)');
 }
 
 function saveBackup(){
