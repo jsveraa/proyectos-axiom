@@ -230,6 +230,15 @@ tbody td{padding:8px 11px;vertical-align:middle}
 /* INDICADORES */
 .ind-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;margin-bottom:20px}
 .ind-card{background:var(--sf);border:1px solid var(--bd);border-radius:var(--r);overflow:hidden}
+.ind-proy-filter{display:flex;align-items:center;gap:8px;padding:10px 14px;background:var(--sf2);border-bottom:1px solid var(--bd);}
+.ind-proy-filter label{font-size:11px;color:var(--txm);text-transform:uppercase;letter-spacing:.7px;white-space:nowrap;}
+.ind-proy-filter select{background:var(--bg);border:1px solid var(--bd);color:var(--tx);font-family:var(--mo);font-size:11px;padding:4px 8px;border-radius:4px;outline:none;flex:1;}
+.ind-proy-filter select:focus{border-color:var(--ac2);}
+.horas-proy-row{display:flex;justify-content:space-between;align-items:center;padding:4px 0;font-size:11px;border-bottom:1px solid rgba(42,45,58,.3);}
+.horas-proy-row:last-child{border-bottom:none;}
+.horas-proy-name{color:var(--txm);flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.horas-proy-vals{font-family:var(--dp);font-size:11px;color:var(--tx);white-space:nowrap;margin-left:8px;}
+.horas-proy-pct{font-family:var(--dp);font-size:11px;font-weight:700;margin-left:6px;width:42px;text-align:right;}
 .ind-card-hdr{padding:12px 16px;border-bottom:1px solid var(--bd);display:flex;justify-content:space-between;align-items:center}
 .ind-card-nombre{font-weight:600;font-size:13px}
 .ind-card-areas{display:flex;gap:3px;flex-wrap:wrap;margin-top:3px}
@@ -510,8 +519,8 @@ input[type=date]{color-scheme:light}
   <div class="sep"></div>
   <div style="font-family:var(--dp);font-size:12px;font-weight:700;color:var(--txm);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">Proyectos por vencer</div>
   <div id="dp"></div>
-  <div id="ent-indicators-container"></div>
   <div id="tiempos-dash-container"></div>
+  <div id="ent-indicators-container"></div>
   <div id="proj-cards-container"></div>
 </div>
 
@@ -544,6 +553,12 @@ input[type=date]{color-scheme:light}
 
 <div id="panel-indicadores" class="panel">
   <div class="sh"><span class="st">Dashboard Personal</span><span style="font-size:11px;color:var(--txm)">Indicadores de desempeño por persona</span></div>
+  <div class="ind-proy-filter">
+    <label>Filtrar por proyecto:</label>
+    <select id="ind-proy-sel" onchange="rIndicadores()">
+      <option value="">Todos los proyectos</option>
+    </select>
+  </div>
   <div id="ind-content"></div>
 </div>
 </div>
@@ -1855,13 +1870,18 @@ function calcIndicadores(pid, proyectos, personal){
   const calidad=promedioRev!==null?Math.max(0,Math.round((1-Math.min(+promedioRev,BENCH)/BENCH)*100)):null;
   // Hours: this person's own planned/executed hours across assigned projects
   let horasPlan=0,horasEjec=0;
+  const horasPorProy=[];
   asignados.forEach(pr=>{
     const hpd=pr.horasPersonaDisc&&pr.horasPersonaDisc[pid]?pr.horasPersonaDisc[pid]:null;
     if(hpd){
+      let ppPlan=0,ppEjec=0;
       Object.values(hpd).forEach(h=>{
         horasPlan+=+(h.plan||0);
         horasEjec+=+(h.ejec||0);
+        ppPlan+=+(h.plan||0);
+        ppEjec+=+(h.ejec||0);
       });
+      if(ppPlan>0||ppEjec>0) horasPorProy.push({nombre:pr.nombre,cliente:pr.cliente,plan:ppPlan,ejec:ppEjec});
     }
   });
   const horasPct=horasPlan>0?Math.round(horasEjec/horasPlan*100):null; // >100 means over budget
@@ -1880,14 +1900,28 @@ function calcIndicadores(pid, proyectos, personal){
   });
   var cargaMensualPct=Math.round(cargaMensualH/HORAS_MES*100);
   var cargaMensualLabel=Math.round(cargaMensualH*10)/10;
-  return{uniqProy,totalUniq,carga,totalDocs,entregadosTiempo,entregadosAtrasado,enProceso,sinIniciar,noEntregado,productividad,promedioRev,calidad,areas,planCount,uniqProyLabel,horasPlan,horasEjec,horasPct,cargaMensualH,cargaMensualPct,cargaMensualLabel};
+  return{uniqProy,totalUniq,carga,totalDocs,entregadosTiempo,entregadosAtrasado,enProceso,sinIniciar,noEntregado,productividad,promedioRev,calidad,areas,planCount,uniqProyLabel,horasPlan,horasEjec,horasPct,horasPorProy,cargaMensualH,cargaMensualPct,cargaMensualLabel};
 }
 
 function rIndicadores(){
   var d=gd();
   var container=document.getElementById('ind-content');
   if(!d.personal.length){container.innerHTML='<div class="empty"><div class="ic">&#128101;</div><p>No hay personal registrado</p></div>';return;}
-  var proyEncurso=d.proyectos.filter(esActivo);
+
+  // Populate project filter selector
+  var sel=document.getElementById('ind-proy-sel');
+  var curProy=sel?sel.value:'';
+  if(sel){
+    var uniqNombres=[...new Set(d.proyectos.filter(esActivo).map(p=>p.nombre))].sort();
+    sel.innerHTML='<option value="">Todos los proyectos</option>'
+      +uniqNombres.map(n=>'<option value="'+escH(n)+'"'+(n===curProy?' selected':'')+'>'+escH(n)+'</option>').join('');
+  }
+
+  var proyFiltro=sel?sel.value:'';
+  var proyectosBase = proyFiltro
+    ? d.proyectos.filter(pr=>pr.nombre===proyFiltro)
+    : d.proyectos;
+  var proyEncurso=proyectosBase.filter(esActivo);
   var totalUniq=proyectosUnicos(proyEncurso).length;
   var chartData=d.personal.map(function(p){
     var asignados=proyectosUnicos(proyEncurso.filter(function(pr){return estaEnEquipo(pr,p.id);})).length;
@@ -1910,7 +1944,7 @@ function rIndicadores(){
   var chartHTML='<div class="chart-wrap"><div class="chart-title">Carga de trabajo &mdash; proyectos asignados por persona (excl. completados)</div><div class="bar-chart">'+chartRows+'</div></div>';
   var cardsHTML='';
   d.personal.forEach(function(p){
-    var ind=calcIndicadores(p.id,d.proyectos,d.personal);
+    var ind=calcIndicadores(p.id,proyectosBase,d.personal);
     var areaTags=ind.areas.map(function(a){return '<span class="b '+(AB[a]||'')+'">'+a+'</span>';}).join('');
     var prodColor=ind.productividad===null?'var(--txm)':ind.productividad>=80?'var(--ac4)':ind.productividad>=50?'var(--arq)':'var(--ac3)';
     var cargColor=ind.carga>=75?'var(--ac3)':ind.carga>=50?'var(--arq)':'var(--ac4)';
@@ -1940,16 +1974,29 @@ function rIndicadores(){
       +(function(){
         if(!ind.horasPlan)return '';
         var pct=ind.horasPct||0;
-        // >100% means overrun (negative): green <=100%, orange 101-120%, red >120%
         var tColor=pct<=100?'var(--ac4)':pct<=120?'var(--arq)':'var(--ac3)';
-        var barW=Math.min(100,pct); // bar capped at 100% visual
+        var barW=Math.min(100,pct);
         var overrun=pct>100;
-        var label=overrun?'+'+( pct-100)+'% sobreejecutado':pct+'%';
-        return '<div class="ind-metric"><div style="flex:1">'
-          +'<div class="ind-metric-label">Planificación de tiempos'+(overrun?' <span style="color:var(--ac3);font-size:10px">⚠ Sobreejecutado</span>':'')+'</div>'
-          +'<div style="font-size:10px;color:var(--txm)">'+ind.horasEjec+'h ejec. / '+ind.horasPlan+'h plan.</div>'
+        var label=overrun?'+'+(pct-100)+'% sobreej.':pct+'%';
+        // Per-project breakdown
+        var proyRows='';
+        ind.horasPorProy.forEach(function(hp){
+          var ppct=hp.plan>0?Math.round(hp.ejec/hp.plan*100):null;
+          var pcolor=ppct===null?'var(--txm)':ppct<=100?'var(--ac4)':ppct<=120?'var(--arq)':'var(--ac3)';
+          var plabel=ppct===null?'—':(ppct<=100?ppct+'%':'+'+(ppct-100)+'%');
+          proyRows+='<div class="horas-proy-row">'
+            +'<div class="horas-proy-name" title="'+escH(hp.nombre)+'">'+escH(hp.nombre)+'</div>'
+            +'<div class="horas-proy-vals">'+hp.ejec+'h / '+hp.plan+'h</div>'
+            +'<div class="horas-proy-pct" style="color:'+pcolor+'">'+plabel+'</div>'
+            +'</div>';
+        });
+        return '<div class="ind-metric" style="flex-direction:column;align-items:stretch;gap:6px"><div style="display:flex;justify-content:space-between;align-items:center">'
+          +'<div style="flex:1"><div class="ind-metric-label">Planificación de tiempos'+(overrun?' <span style="color:var(--ac3);font-size:10px">⚠ Sobreejecutado</span>':'')+'</div>'
+          +'<div style="font-size:10px;color:var(--txm)">'+ind.horasEjec+'h ejec. / '+ind.horasPlan+'h plan. (total)</div>'
           +'<div class="ind-bar"><div class="ind-bar-fill" style="width:'+barW+'%;background:'+tColor+'"></div></div>'
-          +'</div><div class="ind-metric-val" style="color:'+tColor+'">'+label+'</div></div>';
+          +'</div><div class="ind-metric-val" style="color:'+tColor+'">'+label+'</div></div>'
+          +(proyRows?'<div style="border-top:1px solid var(--bd);padding-top:6px;margin-top:2px;">'+proyRows+'</div>':'')
+          +'</div>';
       })()
 
       +(function(){
