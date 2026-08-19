@@ -1990,8 +1990,20 @@ function calcIndicadores(pid, proyectos, personal){
   const encursoTotal=proyectosUnicos(proyectos.filter(esActivo)).length;
   const carga=encursoTotal>0?Math.round(encursoAsig/encursoTotal*100):0;
   const uniqProyLabel=encursoAsig;
-  const promedioRev=docsConRevision>0?(totalRevisiones/docsConRevision).toFixed(1):null;
-  // Calidad: 100% - 20% por cada revisión promedio (benchmark 5 → 0%). Incluye docs con 0 revisiones.
+  // Calidad: promedio de promedios por proyecto (cada proyecto pesa igual)
+  const proyConRevision=[];
+  asignados.forEach(pr=>{
+    const areaUsada=areaEnProy(pr,pid);
+    let prRevTotal=0,prRevDocs=0;
+    Object.entries(pr.entregables||{}).forEach(([disc,arr])=>{
+      if(!arr||!arr.length)return;
+      if(areaUsada&&!discCuentaParaArea(disc,areaUsada))return;
+      arr.forEach(r=>{prRevTotal+=+(r.revisiones||0);prRevDocs++;});
+    });
+    if(prRevDocs>0) proyConRevision.push(prRevTotal/prRevDocs);
+  });
+  const promedioRev=proyConRevision.length>0?(proyConRevision.reduce((s,v)=>s+v,0)/proyConRevision.length).toFixed(1):null;
+  // 100% - 20% por cada revisión promedio (benchmark 5 → 0%)
   const calidad=promedioRev!==null?Math.max(0,Math.round(100-Math.min(+promedioRev,5)*20)):null;
   // Hours: this person's own planned/executed hours across assigned projects
   let horasPlan=0,horasEjec=0;
