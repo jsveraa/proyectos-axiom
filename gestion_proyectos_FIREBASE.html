@@ -1042,7 +1042,7 @@ function _renderProjCardsFase(d, _today){
     Object.entries(p.entregables||{}).forEach(function(e2){
       var disc=e2[0],arr=e2[1]||[];
       if(!fa[disc])fa[disc]={plan:arr.length,ent:0};
-      arr.forEach(function(r){if(r.estado==='entregado')fa[disc].ent++;});
+      arr.forEach(function(r){var est=r.estado||'sininciar';if(est==='atiempo'||est==='atrasado')fa[disc].ent++;});
       totPlan+=arr.length;
       fa[disc].ent_sum=fa[disc].ent;
     });
@@ -2164,12 +2164,50 @@ function openIndPopup(pid){
   var prodColor=ind.productividad===null?'var(--txm)':ind.productividad>=80?'var(--ac4)':ind.productividad>=50?'var(--arq)':'var(--ac3)';
   var cargColor=ind.carga>=75?'var(--ac3)':ind.carga>=50?'var(--arq)':'var(--ac4)';
   var calColor=ind.calidad===null?'var(--txm)':ind.calidad>=70?'var(--ac4)':ind.calidad>=40?'var(--arq)':'var(--ac3)';
+
+  // ── Per-project breakdown for productividad and calidad ──
+  var asignadosPers=base.filter(function(pr){return estaEnEquipo(pr,pid);});
+  var prodPorProy=[];
+  var calPorProy=[];
+  asignadosPers.forEach(function(pr){
+    var areaUsada=areaEnProy(pr,pid);
+    var aTiempo=0,atrasado=0,noEnt=0,revTotal=0,revDocs=0;
+    Object.entries(pr.entregables||{}).forEach(function(kv){
+      var disc=kv[0],arr=kv[1];
+      if(!arr||!arr.length)return;
+      if(areaUsada&&!discCuentaParaArea(disc,areaUsada))return;
+      arr.forEach(function(r){
+        var est=r.estado||'sininciar';
+        if(est==='atiempo')aTiempo++;
+        else if(est==='atrasado')atrasado++;
+        else if(est==='noentregado')noEnt++;
+        var rev=+(r.revisiones||0);
+        if(rev>0){revTotal+=rev;revDocs++;}
+      });
+    });
+    var denom=aTiempo+atrasado+noEnt;
+    if(denom>0) prodPorProy.push({nombre:pr.nombre,cliente:pr.cliente,aTiempo:aTiempo,denom:denom,pct:Math.round(aTiempo/denom*100)});
+    var promRev=revDocs>0?(revTotal/revDocs):null;
+    if(promRev!==null) calPorProy.push({nombre:pr.nombre,cliente:pr.cliente,promRev:promRev.toFixed(1),cal:Math.max(0,Math.round((1-Math.min(promRev,3)/3)*100))});
+  });
+
   function metric(label,sub,pct,val,col){
     return '<div class="ind-metric"><div style="flex:1">'
       +'<div class="ind-metric-label">'+label+'</div>'
       +'<div style="font-size:10px;color:var(--txm)">'+sub+'</div>'
       +'<div class="ind-bar"><div class="ind-bar-fill" style="width:'+(pct||0)+'%;background:'+col+'"></div></div>'
       +'</div><div class="ind-metric-val" style="color:'+col+'">'+val+'</div></div>';
+  }
+  function metricExpandable(label,sub,pct,val,col,uid,rows){
+    return '<div class="ind-metric" style="flex-direction:column;align-items:stretch;gap:4px">'
+      +'<div style="display:flex;justify-content:space-between;align-items:center">'
+      +'<div style="flex:1"><div class="ind-metric-label">'+label+'</div>'
+      +'<div style="font-size:10px;color:var(--txm)">'+sub+'</div>'
+      +'<div class="ind-bar"><div class="ind-bar-fill" style="width:'+(pct||0)+'%;background:'+col+'"></div></div>'
+      +'</div><div class="ind-metric-val" style="color:'+col+'">'+val+'</div></div>'
+      +(rows?'<button onclick="var el=document.getElementById(\''+uid+'\');el.style.display=el.style.display===\'none\'?\'\':\'none\';this.textContent=el.style.display===\'none\'?\'▼ Ver por proyecto\':\'▲ Ocultar proyectos\';" style="background:none;border:none;color:var(--ac2);font-size:10px;cursor:pointer;padding:2px 0;text-align:left;">▼ Ver por proyecto</button>':'')
+      +(rows?'<div id="'+uid+'" style="display:none;border-top:1px solid var(--bd);padding-top:5px;">'+rows+'</div>':'')
+      +'</div>';
   }
   var tiemposHTML='';
   if(ind.horasPlan){
@@ -2207,9 +2245,39 @@ function openIndPopup(pid){
   document.getElementById('ind-popup-nombre').textContent=p.nombre;
   document.getElementById('ind-popup-areas').innerHTML=areaTags+'<span style="font-size:11px;color:var(--txm);margin-left:8px">'+ind.uniqProy+' proyecto'+(ind.uniqProy!==1?'s':'')+'</span>';
   document.getElementById('ind-popup-body').innerHTML=
-    metric('Productividad',ind.entregadosTiempo+' a tiempo / '+(ind.entregadosTiempo+ind.entregadosAtrasado)+' entregados',ind.productividad||0,ind.productividad===null?'Sin datos':ind.productividad+'%',prodColor)
+    metricExpandable(
+      'Productividad',
+      ind.entregadosTiempo+' a tiempo / '+(ind.entregadosTiempo+ind.entregadosAtrasado)+' entregados',
+      ind.productividad||0,
+      ind.productividad===null?'Sin datos':ind.productividad+'%',
+      prodColor,
+      'popup-prod-'+pid,
+      prodPorProy.length>1 ? prodPorProy.map(function(pp){
+        var pc=pp.pct>=80?'var(--ac4)':pp.pct>=50?'var(--arq)':'var(--ac3)';
+        return '<div class="horas-proy-row">'
+          +'<div class="horas-proy-name">'+escH(pp.nombre)+'</div>'
+          +'<div class="horas-proy-vals">'+pp.aTiempo+'/'+pp.denom+' docs</div>'
+          +'<div class="horas-proy-pct" style="color:'+pc+'">'+pp.pct+'%</div>'
+          +'</div>';
+      }).join('') : ''
+    )
     +metric('Carga de trabajo',(ind.uniqProyLabel||ind.uniqProy)+' proyectos activos asignados',ind.carga,ind.carga+'%',cargColor)
-    +metric('Calidad documental',(ind.promedioRev===null?'Sin datos':ind.promedioRev+' rev/doc')+' (0 rev = 100%)',ind.calidad||0,ind.calidad===null?'Sin datos':ind.calidad+'%',calColor)
+    +metricExpandable(
+      'Calidad documental',
+      (ind.promedioRev===null?'Sin datos':ind.promedioRev+' rev/doc')+' (0 rev = 100%)',
+      ind.calidad||0,
+      ind.calidad===null?'Sin datos':ind.calidad+'%',
+      calColor,
+      'popup-cal-'+pid,
+      calPorProy.length>1 ? calPorProy.map(function(cp){
+        var cc=cp.cal>=70?'var(--ac4)':cp.cal>=40?'var(--arq)':'var(--ac3)';
+        return '<div class="horas-proy-row">'
+          +'<div class="horas-proy-name">'+escH(cp.nombre)+'</div>'
+          +'<div class="horas-proy-vals">'+cp.promRev+' rev/doc</div>'
+          +'<div class="horas-proy-pct" style="color:'+cc+'">'+cp.cal+'%</div>'
+          +'</div>';
+      }).join('') : ''
+    )
     +tiemposHTML
     +statusHTML;
   document.getElementById('ind-popup-overlay').classList.add('open');
