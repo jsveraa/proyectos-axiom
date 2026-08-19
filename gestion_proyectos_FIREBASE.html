@@ -1967,7 +1967,7 @@ function calcIndicadores(pid, proyectos, personal){
         else sinIniciar++;
         planCount++;
         const rev=+(r.revisiones||0);
-        if(rev>0){totalRevisiones+=rev;docsConRevision++;}
+        totalRevisiones+=rev; docsConRevision++; // all docs, including 0-revision ones
       });
     });
   });
@@ -1991,8 +1991,8 @@ function calcIndicadores(pid, proyectos, personal){
   const carga=encursoTotal>0?Math.round(encursoAsig/encursoTotal*100):0;
   const uniqProyLabel=encursoAsig;
   const promedioRev=docsConRevision>0?(totalRevisiones/docsConRevision).toFixed(1):null;
-  const BENCH=3;
-  const calidad=promedioRev!==null?Math.max(0,Math.round((1-Math.min(+promedioRev,BENCH)/BENCH)*100)):null;
+  // Calidad: 100% - 20% por cada revisión promedio (benchmark 5 → 0%). Incluye docs con 0 revisiones.
+  const calidad=promedioRev!==null?Math.max(0,Math.round(100-Math.min(+promedioRev,5)*20)):null;
   // Hours: this person's own planned/executed hours across assigned projects
   let horasPlan=0,horasEjec=0;
   const horasPorProy=[];
@@ -2188,7 +2188,16 @@ function openIndPopup(pid){
     var denom=aTiempo+atrasado+noEnt;
     if(denom>0) prodPorProy.push({nombre:pr.nombre,cliente:pr.cliente,aTiempo:aTiempo,denom:denom,pct:Math.round(aTiempo/denom*100)});
     var promRev=revDocs>0?(revTotal/revDocs):null;
-    if(promRev!==null) calPorProy.push({nombre:pr.nombre,cliente:pr.cliente,promRev:promRev.toFixed(1),cal:Math.max(0,Math.round((1-Math.min(promRev,3)/3)*100))});
+    // Include all docs (revDocs here counts all), same formula as global
+    var allRevDocs=0,allRevTotal2=0;
+    Object.entries(pr.entregables||{}).forEach(function(kv){
+      var disc=kv[0],arr=kv[1];
+      if(!arr||!arr.length)return;
+      if(areaUsada&&!discCuentaParaArea(disc,areaUsada))return;
+      arr.forEach(function(r){allRevTotal2+=+(r.revisiones||0);allRevDocs++;});
+    });
+    var promRevAll=allRevDocs>0?(allRevTotal2/allRevDocs):null;
+    if(promRevAll!==null) calPorProy.push({nombre:pr.nombre,cliente:pr.cliente,promRev:promRevAll.toFixed(1),cal:Math.max(0,Math.round(100-Math.min(promRevAll,5)*20))});
   });
 
   function metric(label,sub,pct,val,col){
