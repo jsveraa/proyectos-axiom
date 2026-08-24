@@ -763,6 +763,14 @@ const DISC_AREA = {
 };
 // Devuelve true si la disciplina cuenta para el área dada
 function discCuentaParaArea(disc, area){ return (DISC_AREA[disc]||[]).includes(area); }
+// Para una disciplina técnica dada, determina a cuál de las áreas propias
+// de esa persona pertenece (una disciplina puede mapear a varias áreas,
+// p.ej. Hidrosanitario → Estructural|Mecánicas).
+function areaDeDiscParaPersona(disc, per){
+  const areasPersona=getAreas(per||{});
+  const candidatas=DISC_AREA[disc]||[];
+  return candidatas.find(a=>areasPersona.includes(a))||candidatas[0]||null;
+}
 
 let ePId=null,ePersId=null,drawerPId=null;
 
@@ -770,6 +778,29 @@ let ePId=null,ePersId=null,drawerPId=null;
 let _cache  = null;
 let _fbReady = false;
 
+// Consolida horas registradas por disciplina técnica en horas por área,
+// sumando las que ya existan. Idempotente: las claves que ya son un área
+// (AB) se conservan tal cual, así que puede correr en cada carga sin
+// duplicar datos.
+function _migrarHorasAArea(hpd, personal){
+  const out={};
+  Object.keys(hpd||{}).forEach(persId=>{
+    const per=(personal||[]).find(x=>x.id===persId);
+    const areasPersona=per?(per.areas||[]):[];
+    const porArea={};
+    Object.keys(hpd[persId]||{}).forEach(key=>{
+      const h=hpd[persId][key]||{plan:0,ejec:0};
+      let area;
+      if(AB.hasOwnProperty(key)){area=key;}
+      else{const cand=DISC_AREA[key]||[];area=cand.find(a=>areasPersona.includes(a))||cand[0]||key;}
+      if(!porArea[area])porArea[area]={plan:0,ejec:0};
+      porArea[area].plan+=+(h.plan||0);
+      porArea[area].ejec+=+(h.ejec||0);
+    });
+    out[persId]=porArea;
+  });
+  return out;
+}
 function migrate(d){
   if(!d||!d.proyectos||!d.personal)return{proyectos:defP(),personal:defPers()};
   d.personal=d.personal.map(p=>({...p,areas:p.areas||(p.area?[p.area]:[])}));
@@ -782,7 +813,7 @@ function migrate(d){
     return{...p,equipo:eq,entregables:p.entregables||{},
       closedDate:p.closedDate||null,
       horasDisciplina:p.horasDisciplina||{},
-      horasPersonaDisc:p.horasPersonaDisc||{},
+      horasPersonaDisc:_migrarHorasAArea(p.horasPersonaDisc||{},d.personal),
       facturado:p.facturado||0};
   });
   return d;
@@ -1859,30 +1890,41 @@ function renderTiempos(){
   var totCol=totPct>100?'var(--ac3)':totPct>=80?'var(--ac4)':totPct>=50?'var(--arq)':'var(--ac2)';
 
   var rows='';
-  // One row per team member — with the discipline(s) of their assigned area
+  // One row per team member per área — usando las disciplinas asignadas en
+  // el paso anterior (Disciplinas & Equipo), agrupadas y sumadas por área.
+  // Una persona con varias áreas relevantes (p.ej. Project Management y
+  // Mecánicas) obtiene una fila por cada área.
   equipo.forEach(function(e){
     var per=d.personal.find(function(x){return x.id===e.id;});
     if(!per)return;
-    var areaUsada=e.area||getAreas(per)[0]||'';
-    // disciplines of this project that belong to this person's area
-    var discsDeArea=(p.disciplinas||[]).filter(function(disc){
-      return discCuentaParaArea(disc,areaUsada);
+    var areasPersona=getAreas(per);
+    var setA={};
+    (e.disciplinas||[]).forEach(function(disc){
+      var ar=areaDeDiscParaPersona(disc,per);
+      if(ar)setA[ar]=true;
     });
-    if(!discsDeArea.length)discsDeArea=['(sin disciplina)'];
-    discsDeArea.forEach(function(disc){
-      var h=(p.horasPersonaDisc[e.id]&&p.horasPersonaDisc[e.id][disc])?p.horasPersonaDisc[e.id][disc]:{plan:0,ejec:0};
+    var areasRelevantes=Object.keys(setA);
+    if(!areasRelevantes.length){
+      (p.disciplinas||[]).forEach(function(disc){
+        var ar=areaDeDiscParaPersona(disc,per);
+        if(ar)setA[ar]=true;
+      });
+      areasRelevantes=Object.keys(setA);
+    }
+    if(!areasRelevantes.length)areasRelevantes=areasPersona.length?areasPersona:[e.area||'(sin área)'];
+    areasRelevantes.forEach(function(area){
+      var h=(p.horasPersonaDisc[e.id]&&p.horasPersonaDisc[e.id][area])?p.horasPersonaDisc[e.id][area]:{plan:0,ejec:0};
       var hp=+(h.plan||0),he=+(h.ejec||0);
       var pct=hp>0?Math.round(he/hp*100):0;
       var col=pct>100?'var(--ac3)':pct>=80?'var(--ac4)':pct>=50?'var(--arq)':'var(--ac2)';
-      var sid=safeId(e.id+'_'+disc);
+      var sid=safeId(e.id+'_'+area);
       rows+='<tr>'
         +'<td style="font-weight:500;font-size:12px">'+per.nombre+'</td>'
-        +'<td><span class="b '+(AB[areaUsada]||'')+'" style="font-size:10px;padding:1px 5px">'+areaUsada+'</span></td>'
-        +'<td style="font-size:11px;color:var(--txm)">'+disc+'</td>'
+        +'<td><span class="b '+(AB[area]||'')+'" style="font-size:10px;padding:1px 5px">'+area+'</span></td>'
         +'<td style="text-align:center"><input class="horas-input" type="number" min="0" value="'+hp+'"'
-        +  ' onchange="updateHoras(\''+e.id+'\',\''+disc+'\',\'plan\',this.value)" placeholder="0"></td>'
+        +  ' onchange="updateHoras(\''+e.id+'\',\''+area+'\',\'plan\',this.value)" placeholder="0"></td>'
         +'<td style="text-align:center"><input class="horas-input" type="number" min="0" value="'+he+'"'
-        +  ' onchange="updateHoras(\''+e.id+'\',\''+disc+'\',\'ejec\',this.value)" placeholder="0"></td>'
+        +  ' onchange="updateHoras(\''+e.id+'\',\''+area+'\',\'ejec\',this.value)" placeholder="0"></td>'
         +(function(){var barW=Math.min(100,pct);var lbl=pct>100?'+'+(pct-100)+'% exc':pct+'%';
           return '<td><div style="display:flex;align-items:center;gap:8px">'
           +'<div class="horas-pct-bar" style="flex:1;'+(pct>100?'background:rgba(232,83,58,.1)':'')+'"><div class="horas-pct-fill" id="hbar-'+sid+'" style="width:'+barW+'%;background:'+col+'"></div></div>'
@@ -1893,9 +1935,9 @@ function renderTiempos(){
   });
 
   container.innerHTML=
-    '<div style="font-size:11px;color:var(--txm);margin-bottom:10px">Horas planificadas y ejecutadas por responsable. Cada persona se mide por separado, incluso si comparten disciplina.</div>'
+    '<div style="font-size:11px;color:var(--txm);margin-bottom:10px">Horas planificadas y ejecutadas por responsable y área. Si una persona participa en más de un área en este proyecto (p.ej. Project Management y Mecánicas), aparece una fila por cada área.</div>'
     +'<table class="horas-table">'
-    +'<thead><tr><th>Responsable</th><th>\u00c1rea</th><th>Disciplina</th><th>H. Plan</th><th>H. Ejec</th><th>Avance</th></tr></thead>'
+    +'<thead><tr><th>Responsable</th><th>Área</th><th>H. Plan</th><th>H. Ejec</th><th>Avance</th></tr></thead>'
     +'<tbody>'+rows+'</tbody>'
     +'</table>'
     +'<div class="horas-summary">'
