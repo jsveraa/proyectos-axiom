@@ -535,6 +535,7 @@ input[type=date]{color-scheme:light}
   <div id="dp"></div>
   <div id="tiempos-dash-container"></div>
   <div id="ent-indicators-container"></div>
+  <div id="missing-data-container"></div>
   <!-- Filter bar for entregables and tiempos -->
   <div class="dash-filter-bar" id="dash-proj-filter-bar" style="display:none">
     <label>Proyecto:</label>
@@ -784,6 +785,10 @@ function migrate(d){
 function gd(){ return _cache||{proyectos:defP(),personal:defPers()}; }
 
 function sd(d){
+  if(drawerPId && typeof _currentUser!=='undefined' && _currentUser){
+    const _p=d.proyectos.find(x=>x.id===drawerPId);
+    if(_p)_p._lastUpdate={fecha:new Date().toISOString(),usuario:_currentUser.username};
+  }
   _cache=d;
   autoSaveDot();
   // Local backup for resilience
@@ -952,8 +957,49 @@ function rDash(){
   renderEntIndicators(d);
   // Per-project tiempos indicator
   renderTiemposDash(d);
+  // Projects missing tiempos / entregables + last update tracking
+  renderMissingDataBox(d);
   // Project cards — per phase
   _renderProjCardsFase(d, today);
+}
+
+function renderMissingDataBox(d){
+  var container=document.getElementById('missing-data-container');
+  if(!container)return;
+  var rows='';
+  d.proyectos.forEach(function(p){
+    var hpd=p.horasPersonaDisc||{};
+    var tieneTiempos=Object.values(hpd).some(function(ph){
+      return Object.values(ph||{}).some(function(h){return +(h&&h.plan||0)>0 || +(h&&h.ejec||0)>0;});
+    });
+    var tieneManual=false;
+    Object.values(p.entregables||{}).forEach(function(arr){
+      (arr||[]).forEach(function(r){if(r&&r.manual)tieneManual=true;});
+    });
+    if(tieneTiempos && tieneManual)return; // sin pendientes, no se muestra
+    var lu=p._lastUpdate;
+    var luFecha=lu?new Date(lu.fecha).toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'})+' '+new Date(lu.fecha).toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'}):'Sin registro';
+    var luUser=lu&&lu.usuario?escH(lu.usuario):'—';
+    rows+='<tr>'
+      +'<td style="font-weight:500">'+escH(p.cliente)+'</td>'
+      +'<td style="font-weight:500">'+escH(p.nombre)+'</td>'
+      +'<td style="text-align:center"><span class="b '+(FB[p.tipo]||'b-det')+'" style="font-size:9px;padding:1px 4px">'+escH(p.tipo)+'</span></td>'
+      +'<td style="text-align:center"><span class="b '+(EB[p.estado]||'')+'" style="font-size:9px;padding:1px 5px">'+escH(p.estado||'')+'</span></td>'
+      +'<td style="text-align:center">'+(tieneTiempos?'<span style="color:var(--ac4)">&#10003;</span>':'<span style="color:var(--ac3);font-weight:600">Falta</span>')+'</td>'
+      +'<td style="text-align:center">'+(tieneManual?'<span style="color:var(--ac4)">&#10003;</span>':'<span style="color:var(--ac3);font-weight:600">Falta</span>')+'</td>'
+      +'<td style="font-size:11px;color:var(--txm)">'+luFecha+'</td>'
+      +'<td style="font-size:11px;color:var(--txm)">'+luUser+'</td>'
+      +'<td><button class="btn bi bs" onclick="openDrawer(\''+p.id+'\')">Ver</button></td>'
+      +'</tr>';
+  });
+  if(!rows){container.innerHTML='';return;}
+  container.innerHTML='<div style="font-family:var(--dp);font-size:12px;font-weight:700;color:var(--ac3);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px;margin-top:20px">&#9888; Proyectos con información pendiente</div>'
+    +'<div class="tw"><table><thead><tr>'
+    +'<th>Cliente</th><th>Proyecto</th><th>Fase</th><th>Estado</th>'
+    +'<th style="text-align:center">Tiempos plan./ejec.</th>'
+    +'<th style="text-align:center">Entregables (lista manual)</th>'
+    +'<th>Última actualización</th><th>Responsable</th><th></th>'
+    +'</tr></thead><tbody>'+rows+'</tbody></table></div>';
 }
 
 function renderEntIndicators(d){
@@ -1693,8 +1739,7 @@ function _renderTiemposDashFiltered(d){
     if(filterProj&&p.nombre!==filterProj)return false;
     if(filterFase&&p.tipo!==filterFase)return false;
     if(filterEst&&p.estado!==filterEst)return false;
-    var hpd=p.horasPersonaDisc||{};
-    return Object.values(hpd).some(function(ph){return Object.values(ph||{}).some(function(h){return +(h.plan||0)>0;});});
+    return true;
   });
   if(!fases.length){container.innerHTML='';return;}
   var rows='';var cardIds=[];
@@ -1708,7 +1753,7 @@ function _renderTiemposDashFiltered(d){
       +'<td style="font-weight:500">'+escH(p.cliente)+'</td>'
       +'<td style="font-weight:500">'+escH(p.nombre)+'</td>'
       +'<td style="text-align:center"><span class="b '+(FB[p.tipo]||'b-det')+'" style="font-size:9px;padding:1px 4px">'+escH(p.tipo)+'</span></td>'
-      +'<td style="text-align:center"><span class="b b-'+(p.estado||'cur').toLowerCase().replace(/ /g,'')+'" style="font-size:9px;padding:1px 5px">'+escH(p.estado||'')+'</span></td>'
+      +'<td style="text-align:center"><span class="b '+(EB[p.estado]||'')+'" style="font-size:9px;padding:1px 5px">'+escH(p.estado||'')+'</span></td>'
       +'<td style="text-align:center;font-weight:600">'+h.plan+'h</td>'
       +'<td style="text-align:center;font-weight:600;color:'+col+'">'+h.ejec+'h</td>'
       +'<td style="min-width:120px"><div style="height:6px;background:var(--bd);border-radius:3px;overflow:hidden"><div style="height:100%;width:'+Math.min(100,pct)+'%;background:'+col+';border-radius:3px"></div></div></td>'
@@ -1717,7 +1762,7 @@ function _renderTiemposDashFiltered(d){
       +'</tr>';
   });
   document.getElementById('dash-proj-filter-bar').style.display='';
-  container.innerHTML='<div style="font-family:var(--dp);font-size:12px;font-weight:700;color:var(--txm);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px;margin-top:20px">Planificación de tiempos por proyecto y fase</div>'
+  container.innerHTML='<div style="font-family:var(--dp);font-size:12px;font-weight:700;color:var(--txm);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px;margin-top:20px">Tiempos planeados vs. ejecutados por proyecto y fase</div>'
     +'<div class="tw"><table><thead><tr>'
     +'<th>Cliente</th><th>Proyecto</th><th>Fase</th><th>Estado</th>'
     +'<th style="text-align:center">H. Plan.</th><th style="text-align:center">H. Ejec.</th>'
