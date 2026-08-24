@@ -558,6 +558,10 @@ input[type=date]{color-scheme:light}
       <option value="Completado">Completado</option>
       <option value="Sin iniciar">Sin iniciar</option>
     </select>
+    <label style="margin-left:8px">Project Manager:</label>
+    <select id="dash-pm-sel" onchange="applyDashFilters()">
+      <option value="">Todos los PM</option>
+    </select>
   </div>
   <div id="proj-cards-container"></div>
 </div>
@@ -644,6 +648,7 @@ input[type=date]{color-scheme:light}
         <div class="fi"><label>Fase</label><select id="d-tipo"><option>Conceptual</option><option>Básico</option><option>Detalle LOD300</option><option>Detalle LOD400</option></select></div>
         <div class="fi"><label>Fecha límite</label><input id="d-fecha" type="date"></div>
         <div class="fi"><label>Estado</label><select id="d-est"><option>Sin iniciar</option><option>En curso</option><option>Atrasado</option><option>Pausado</option><option>Completado</option></select></div>
+        <div class="fi"><label>Facturado (%)</label><input id="d-fact" type="number" min="0" max="100" step="0.1" placeholder="0"></div>
         <div class="fi full"><label>Observaciones</label><textarea id="d-obs"></textarea></div>
       </div>
       <div style="display:flex;justify-content:flex-end;margin-top:14px"><button class="btn bp" onclick="saveDrawerInfo()">Guardar cambios</button></div>
@@ -777,7 +782,8 @@ function migrate(d){
     return{...p,equipo:eq,entregables:p.entregables||{},
       closedDate:p.closedDate||null,
       horasDisciplina:p.horasDisciplina||{},
-      horasPersonaDisc:p.horasPersonaDisc||{}};
+      horasPersonaDisc:p.horasPersonaDisc||{},
+      facturado:p.facturado||0};
   });
   return d;
 }
@@ -1006,10 +1012,12 @@ function renderEntIndicators(d){
   var container=document.getElementById('ent-indicators-container');
   if(!container)return;
   // Iterate each phase (fase) independently — no grouping by proyecto único
+  var f=_readDashFilters();
   var rows='';
   var cardIds=[];
   var bi=0;
   d.proyectos.forEach(function(p){
+    if(!_pasaFiltrosDash(p,f))return;
     var plan=0,ent=0,enProc=0,noEnt=0,sinIn=0;
     Object.values(p.entregables||{}).forEach(function(arr){
       if(!arr)return;
@@ -1022,8 +1030,7 @@ function renderEntIndicators(d){
         else sinIn++;
       });
     });
-    if(plan===0)return;
-    var pct=Math.round(ent/plan*100);
+    var pct=plan>0?Math.round(ent/plan*100):0;
     var col=pct>=80?'var(--ac4)':pct>=50?'var(--arq)':'var(--ac3)';
     var faseBadge='<span class="b '+(FB[p.tipo]||'b-det')+'" style="font-size:9px;padding:1px 4px">'+escH(p.tipo)+'</span>';
     var estBadge='<span class="b '+(EB[p.estado]||'')+'" style="font-size:9px;padding:1px 4px">'+escH(p.estado||'')+'</span>';
@@ -1070,48 +1077,30 @@ function _renderProjCardsFase(d, _today){
   var today=_today||new Date();
   var container=document.getElementById('proj-cards-container');
   if(!container)return;
-  var filterProj=document.getElementById('dash-proj-sel')?document.getElementById('dash-proj-sel').value:'';
-  var filterFase=document.getElementById('dash-fase-sel')?document.getElementById('dash-fase-sel').value:'';
-  var filterEst=document.getElementById('dash-estado-sel')?document.getElementById('dash-estado-sel').value:'';
-  var FASE_ORDER=['Conceptual','Básico','Detalle LOD300','Detalle LOD400'];
-  var proyFiltrados=d.proyectos.filter(function(p){
-    if(filterProj&&p.nombre!==filterProj)return false;
-    if(filterFase&&p.tipo!==filterFase)return false;
-    if(filterEst&&p.estado!==filterEst)return false;
-    return true;
-  });
+  var f=_readDashFilters();
+  var proyFiltrados=d.proyectos.filter(function(p){return _pasaFiltrosDash(p,f);});
   if(!proyFiltrados.length){container.innerHTML='';return;}
-  var html='<div style="font-family:var(--dp);font-size:12px;font-weight:700;color:var(--txm);text-transform:uppercase;letter-spacing:1px;margin-bottom:12px;margin-top:20px">Entregables por proyecto y fase</div>'
+  var html='<div style="font-family:var(--dp);font-size:12px;font-weight:700;color:var(--txm);text-transform:uppercase;letter-spacing:1px;margin-bottom:12px;margin-top:20px">Resumen por proyecto y fase — facturación, tiempos y entregables</div>'
     +'<div class="proj-cards-grid">';
   proyFiltrados.forEach(function(p){
-    var fa={}; var totPlan=0,totEnt=0;
-    Object.entries(p.entregables||{}).forEach(function(e2){
-      var disc=e2[0],arr=e2[1]||[];
-      if(!fa[disc])fa[disc]={plan:arr.length,ent:0};
-      arr.forEach(function(r){var est=r.estado||'sininciar';if(est==='atiempo'||est==='atrasado')fa[disc].ent++;});
+    var totPlan=0,totEnt=0;
+    Object.values(p.entregables||{}).forEach(function(arr){
+      arr=arr||[];
       totPlan+=arr.length;
-      fa[disc].ent_sum=fa[disc].ent;
+      totEnt+=arr.filter(function(r){var est=r.estado||'sininciar';return est==='atiempo'||est==='atrasado'||est==='entregado';}).length;
     });
-    totEnt=Object.values(fa).reduce(function(s,v){return s+v.ent_sum;},0);
     var totPct=totPlan>0?Math.round(totEnt/totPlan*100):0;
     var totColor=totPct>=100?'var(--ac4)':totPct>=50?'var(--ac2)':'var(--ac3)';
+    var horas=horasProyecto(p);
+    var horasPct=horas.plan>0?Math.round(horas.ejec/horas.plan*100):0;
+    var horasColor=horasPct<=100?'var(--ac4)':horasPct<=120?'var(--arq)':'var(--ac3)';
+    var factPct=Math.max(0,Math.min(100,+p.facturado||0));
     var dias=Math.round((new Date(p.fecha+'T12:00:00')-today)/86400000);
     var diasColor=dias<0?'var(--ac3)':dias<14?'var(--arq)':'var(--ac4)';
     var diasLabel=dias<0?Math.abs(dias)+' d. vencido':dias===0?'Vence hoy':dias+' días';
-    var discRows='';
-    FASE_ORDER.forEach(function(disc){
-      var e2=fa[disc];if(!e2||e2.plan===0)return;
-      var dpct=Math.round(e2.ent_sum/e2.plan*100);
-      var dc=dpct>=100?'var(--ac4)':dpct>0?'var(--ac2)':'var(--bd)';
-      discRows+='<div class="phase-row">'
-        +'<div class="phase-label"><span class="b '+(FB[disc]||'b-det')+'" style="font-size:9px;padding:1px 4px">'+disc+'</span></div>'
-        +'<div class="phase-track"><div class="phase-fill" style="width:'+dpct+'%;background:'+dc+'"></div></div>'
-        +'<div class="phase-pct" style="color:'+dc+'">'+dpct+'%</div>'
-        +'</div>';
-    });
     html+='<div class="proj-card">'
       +'<div class="proj-card-top">'
-      +  '<div class="proj-card-title">'+escH(p.cliente)+' \u2014 '+escH(p.nombre)+'</div>'
+      +  '<div class="proj-card-title">'+escH(p.cliente)+' — '+escH(p.nombre)+'</div>'
       +  '<div class="proj-card-sub"><span class="b '+(FB[p.tipo]||'b-det')+'" style="font-size:9px;padding:1px 4px">'+escH(p.tipo)+'</span> <span class="b '+(EB[p.estado]||'')+'" style="font-size:9px;padding:1px 5px">'+escH(p.estado)+'</span></div>'
       +'</div>'
       +'<div class="proj-card-body">'
@@ -1119,10 +1108,9 @@ function _renderProjCardsFase(d, _today){
       +    '<div class="days-num" style="color:'+diasColor+'">'+Math.abs(dias)+'</div>'
       +    '<div class="days-label"><strong style="color:'+diasColor+'">'+diasLabel+'</strong><br>Fecha límite: '+fd(p.fecha)+'</div>'
       +  '</div>'
-      +  discRows
-      +  (totPlan>0
-          ?'<div class="total-row"><div class="total-label">Total fase</div><div class="total-track"><div class="total-fill" style="width:'+totPct+'%;background:'+totColor+'"></div></div><div class="total-pct" style="color:'+totColor+'">'+totPct+'%</div></div>'
-          :'<div style="font-size:11px;color:var(--txm);margin-top:8px">Sin entregables</div>')
+      +  '<div class="total-row" style="margin-top:0;padding-top:0;border-top:none"><div class="total-label">Facturación</div><div class="total-track"><div class="total-fill" style="width:'+factPct+'%;background:var(--ac2)"></div></div><div class="total-pct" style="color:var(--ac2)">'+factPct+'%</div></div>'
+      +  '<div class="total-row"><div class="total-label">Tiempos</div><div class="total-track"><div class="total-fill" style="width:'+Math.min(100,horasPct)+'%;background:'+horasColor+'"></div></div><div class="total-pct" style="color:'+horasColor+'" title="'+horas.ejec+'h ejecutadas / '+horas.plan+'h planeadas">'+(horasPct>100?'+'+(horasPct-100)+'%':horasPct+'%')+'</div></div>'
+      +  '<div class="total-row"><div class="total-label">Entregables</div><div class="total-track"><div class="total-fill" style="width:'+totPct+'%;background:'+totColor+'"></div></div><div class="total-pct" style="color:'+totColor+'" title="'+totEnt+' entregados / '+totPlan+' planeados">'+totPct+'%</div></div>'
       +'<div style="margin-top:8px"><button class="btn bi bs" onclick="openDrawer(\''+p.id+'\')">Ver detalle</button></div>'
       +'</div></div>';
   });
@@ -1410,12 +1398,14 @@ function fillDrawerInfo(p){
   document.getElementById('d-cli').value=p.cliente;document.getElementById('d-nom').value=p.nombre;
   document.getElementById('d-tipo').value=p.tipo;document.getElementById('d-fecha').value=p.fecha;
   document.getElementById('d-est').value=p.estado;document.getElementById('d-obs').value=p.obs||'';
+  document.getElementById('d-fact').value=p.facturado||0;
 }
 function saveDrawerInfo(){
   const d=gd();const idx=d.proyectos.findIndex(x=>x.id===drawerPId);const p=d.proyectos[idx];
   p.cliente=document.getElementById('d-cli').value.trim();p.nombre=document.getElementById('d-nom').value.trim();
   p.tipo=document.getElementById('d-tipo').value;p.fecha=document.getElementById('d-fecha').value;
   p.estado=document.getElementById('d-est').value;p.obs=document.getElementById('d-obs').value.trim();
+  p.facturado=Math.max(0,Math.min(100,+document.getElementById('d-fact').value||0));
   sd(d);document.getElementById('dr-title').textContent=`${p.cliente} — ${p.nombre}`;
   document.getElementById('dr-sub').innerHTML=`<span class="b ${FB[p.tipo]||'b-det'}">${p.tipo}</span> &nbsp; <span class="b ${EB[p.estado]||''}">${p.estado}</span> &nbsp; <span style="color:var(--txm)">Límite: ${fd(p.fecha)}</span>`;
   renderP();notif('Info general guardada');
@@ -1717,6 +1707,26 @@ function delPers(id){if(!confirm('¿Eliminar persona?'))return;const d=gd();d.pe
 // ============ CARGA ============
 function esActivo(p){return p.estado==='En curso'||p.estado==='Atrasado';}
 
+// ── Filtros compartidos del Dashboard (proyecto, fase, estado, PM) ────────
+function _readDashFilters(){
+  return{
+    proj:document.getElementById('dash-proj-sel')?document.getElementById('dash-proj-sel').value:'',
+    fase:document.getElementById('dash-fase-sel')?document.getElementById('dash-fase-sel').value:'',
+    est:document.getElementById('dash-estado-sel')?document.getElementById('dash-estado-sel').value:'',
+    pm:document.getElementById('dash-pm-sel')?document.getElementById('dash-pm-sel').value:''
+  };
+}
+function esPMDeFase(p,pmId){
+  return(p.equipo||[]).some(function(e){return e.id===pmId&&e.area==='Project Management';});
+}
+function _pasaFiltrosDash(p,f){
+  if(f.proj&&p.nombre!==f.proj)return false;
+  if(f.fase&&p.tipo!==f.fase)return false;
+  if(f.est&&p.estado!==f.est)return false;
+  if(f.pm&&!esPMDeFase(p,f.pm))return false;
+  return true;
+}
+
 function renderTiemposDash(d){
   var container=document.getElementById('tiempos-dash-container');
   if(!container)return;
@@ -1726,21 +1736,20 @@ function renderTiemposDash(d){
     var uniqN=[...new Set(d.proyectos.map(function(p){return p.nombre;}))].sort();
     uniqN.forEach(function(n){var o=document.createElement('option');o.value=n;o.textContent=n;projSel.appendChild(o);});
   }
+  // Populate Project Manager filter
+  var pmSel=document.getElementById('dash-pm-sel');
+  if(pmSel && pmSel.options.length<=1){
+    var pms=d.personal.filter(function(per){return getAreas(per).includes('Project Management');}).sort(function(a,b){return a.nombre.localeCompare(b.nombre);});
+    pms.forEach(function(per){var o=document.createElement('option');o.value=per.id;o.textContent=per.nombre;pmSel.appendChild(o);});
+  }
   _renderTiemposDashFiltered(d);
 }
 
 function _renderTiemposDashFiltered(d){
   var container=document.getElementById('tiempos-dash-container');
   if(!container)return;
-  var filterProj=document.getElementById('dash-proj-sel')?document.getElementById('dash-proj-sel').value:'';
-  var filterFase=document.getElementById('dash-fase-sel')?document.getElementById('dash-fase-sel').value:'';
-  var filterEst=document.getElementById('dash-estado-sel')?document.getElementById('dash-estado-sel').value:'';
-  var fases=d.proyectos.filter(function(p){
-    if(filterProj&&p.nombre!==filterProj)return false;
-    if(filterFase&&p.tipo!==filterFase)return false;
-    if(filterEst&&p.estado!==filterEst)return false;
-    return true;
-  });
+  var f=_readDashFilters();
+  var fases=d.proyectos.filter(function(p){return _pasaFiltrosDash(p,f);});
   if(!fases.length){container.innerHTML='';return;}
   var rows='';var cardIds=[];
   fases.forEach(function(p,bi){
@@ -1777,6 +1786,7 @@ function _renderTiemposDashFiltered(d){
 function applyDashFilters(){
   var d=gd();
   _renderTiemposDashFiltered(d);
+  renderEntIndicators(d);
   _renderProjCardsFase(d);
 }
 
